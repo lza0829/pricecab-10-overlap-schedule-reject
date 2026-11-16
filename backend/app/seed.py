@@ -45,7 +45,11 @@ def init_schema(conn) -> None:
           ticket_id INTEGER NOT NULL REFERENCES price_tickets(id) ON DELETE CASCADE,
           sku_code TEXT NOT NULL,
           old_price REAL NOT NULL,
-          new_price REAL NOT NULL
+          new_price REAL NOT NULL,
+          -- 切断账本：该明细行的有效区间为 [effective_at, cut_at)。
+          -- NULL 表示未被后序单切断，仍然开放。cut_at 只允许在建单/改约路径写入。
+          cut_at TEXT,
+          cut_by_ticket_id INTEGER
         );
         CREATE TABLE IF NOT EXISTS apply_batches (
           id INTEGER PRIMARY KEY,
@@ -89,10 +93,20 @@ def init_schema(conn) -> None:
     )
 
 
+def _migrate(conn) -> None:
+    """Idempotent column migrations for databases created before the cut ledger."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(price_ticket_lines)").fetchall()}
+    if "cut_at" not in cols:
+        conn.execute("ALTER TABLE price_ticket_lines ADD COLUMN cut_at TEXT")
+    if "cut_by_ticket_id" not in cols:
+        conn.execute("ALTER TABLE price_ticket_lines ADD COLUMN cut_by_ticket_id INTEGER")
+
+
 def seed_if_empty() -> None:
     conn = connect()
     try:
         init_schema(conn)
+        _migrate(conn)
         n = conn.execute("SELECT COUNT(*) c FROM skus").fetchone()["c"]
         if n:
             conn.commit()

@@ -56,7 +56,11 @@ def apply_due() -> dict[str, Any]:
         if not clock:
             raise HTTPException(400, "业务钟未设置")
         due = ticket_repo.due_tickets(conn, clock)
-        if not due:
+        # 到期单里可能全部已过有效区间（将在下面转 superseded），真正会产生写入的
+        # 单按同一套行级存活口径预判；一个都没有就不落空批次。
+        if not due or ticket_repo.count_live_due_tickets(conn, clock) == 0:
+            for t in due:
+                ticket_repo.mark_superseded(conn, t["id"])
             conn.commit()
             return {
                 "applied": False,
@@ -82,7 +86,15 @@ def apply_due() -> dict[str, Any]:
         )
 
         for t in due:
-            lines = ticket_repo.list_lines(conn, t["id"])
+            # 行级半开区间 [effective_at, cut_at)：只写 clock 时刻仍存活的行。
+            # cut_at <= clock 的前序行严禁写价签。
+            # 注意：应用路径对 cut_at/cut_by_ticket_id 只读，禁止在此修改切断标记。
+            lines = ticket_repo.live_lines(conn, t["id"], clock)
+            if not lines:
+                # 整单有效区间已完全流逝（所有行都过了 cut_at），转终态并跳过，
+                # 不产生任何价签写入。
+                ticket_repo.mark_superseded(conn, t["id"])
+                continue
             for line in lines:
                 price_repo.upsert_book(
                     conn,
@@ -96,16 +108,17 @@ def apply_due() -> dict[str, Any]:
             ticket_repo.mark_applied(conn, t["id"], applied_at=created, batch_id=batch_id)
             applied_tickets.append(t["ticket_no"])
 
+        written_count = len(applied_tickets)
         conn.execute(
             "UPDATE apply_batches SET ticket_count=?, line_count=?, status=? WHERE id=?",
-            (len(due), line_total, "done", batch_id),
+            (written_count, line_total, "done", batch_id),
         )
         conn.commit()
         return {
             "applied": True,
             "batch_no": batch_no,
             "business_clock": clock,
-            "ticket_count": len(due),
+            "ticket_count": written_count,
             "line_count": line_total,
             "tickets": applied_tickets,
         }

@@ -14,6 +14,8 @@ const form = reactive({
   new_price: '',
 })
 const lines = ref([])
+// 改约中的单号与新时刻
+const rescheduleMap = reactive({})
 
 async function refresh() {
   skus.value = await api.skus()
@@ -45,10 +47,33 @@ async function submit() {
       note: form.note || null,
       lines: lines.value,
     })
-    msg.value = `已创建 ${t.ticket_no}`
+    const cut = t.cut_tickets?.length ? `，已切断前序单：${t.cut_tickets.join('、')}` : ''
+    msg.value = `已创建 ${t.ticket_no}${cut}`
     form.title = ''
     form.note = ''
     lines.value = []
+    await refresh()
+  } catch (e) {
+    err.value = e.message
+  }
+}
+
+function startReschedule(t) {
+  rescheduleMap[t.id] = t.effective_at
+}
+
+function cancelReschedule(id) {
+  delete rescheduleMap[id]
+}
+
+async function submitReschedule(t) {
+  msg.value = ''
+  err.value = ''
+  try {
+    const out = await api.rescheduleTicket(t.id, rescheduleMap[t.id])
+    const cut = out.cut_tickets?.length ? `，已切断：${out.cut_tickets.join('、')}` : ''
+    msg.value = `${t.ticket_no} 改约成功${cut}`
+    delete rescheduleMap[t.id]
     await refresh()
   } catch (e) {
     err.value = e.message
@@ -61,7 +86,7 @@ onMounted(() => refresh().catch((e) => (err.value = e.message)))
 <template>
   <section class="hero">
     <h1>改价单</h1>
-    <p>为商品预约新价与生效时刻。未到业务钟前不会写入现行价签。</p>
+    <p>为商品预约新价与生效时刻。同商品重叠的预约单按「允许创建并切断」处理：新单生效时刻起切断前序单的有效区间，前序单截止后不再写入价签。</p>
   </section>
 
   <div class="panel">
@@ -104,18 +129,40 @@ onMounted(() => refresh().catch((e) => (err.value = e.message)))
     <h2>改价单列表</h2>
     <table>
       <thead>
-        <tr><th>单号</th><th>标题</th><th>生效时刻</th><th>行数</th><th>状态</th><th>已应用批次</th></tr>
+        <tr><th>单号</th><th>标题</th><th>生效时刻</th><th>行数</th><th>状态</th><th>被切行</th><th>已应用批次</th><th>操作</th></tr>
       </thead>
       <tbody>
         <tr v-for="t in tickets" :key="t.id">
           <td>{{ t.ticket_no }}</td>
           <td>{{ t.title }}</td>
-          <td>{{ t.effective_at }}</td>
+          <td>
+            <input v-if="rescheduleMap[t.id] !== undefined" v-model="rescheduleMap[t.id]" style="width:13rem" />
+            <template v-else>{{ t.effective_at }}</template>
+          </td>
           <td>{{ t.line_count }}</td>
           <td>
-            <span class="tag" :class="t.status === 'applied' ? 'ok' : 'warn'">{{ t.status }}</span>
+            <span class="tag" :class="t.status === 'applied' ? 'ok' : t.status === 'superseded' ? 'bad' : 'warn'">
+              {{ t.status }}
+            </span>
+          </td>
+          <td>
+            <span v-if="t.cut_line_count" class="tag bad">{{ t.cut_line_count }} 行已切断</span>
+            <span v-else class="tag muted">—</span>
           </td>
           <td>{{ t.apply_batch_id || '—' }}</td>
+          <td>
+            <template v-if="rescheduleMap[t.id] !== undefined">
+              <button class="btn" type="button" @click="submitReschedule(t)">保存改约</button>
+              <button class="btn ghost" type="button" @click="cancelReschedule(t.id)">取消</button>
+            </template>
+            <button
+              v-else-if="t.status === 'scheduled'"
+              class="btn ghost"
+              type="button"
+              @click="startReschedule(t)"
+            >改约</button>
+            <span v-else class="tag muted">终态不可改约</span>
+          </td>
         </tr>
       </tbody>
     </table>

@@ -22,6 +22,8 @@ export const api = {
   tickets: () => request('/api/tickets'),
   ticket: (id) => request(`/api/tickets/${id}`),
   createTicket: (body) => request('/api/tickets', { method: 'POST', body: JSON.stringify(body) }),
+  rescheduleTicket: (id, effective_at) =>
+    request(`/api/tickets/${id}/reschedule`, { method: 'PUT', body: JSON.stringify({ effective_at }) }),
   clock: () => request('/api/apply/clock'),
   setClock: (business_clock) =>
     request('/api/apply/clock', { method: 'PUT', body: JSON.stringify({ business_clock }) }),

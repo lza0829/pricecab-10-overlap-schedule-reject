@@ -30,7 +30,7 @@ def dashboard() -> dict[str, Any]:
             "book_count": conn.execute("SELECT COUNT(*) c FROM price_book").fetchone()["c"],
             "sale_count": conn.execute("SELECT COUNT(*) c FROM sales_fixture").fetchone()["c"],
             "batch_count": conn.execute("SELECT COUNT(*) c FROM apply_batches").fetchone()["c"],
-            "due_now": len(ticket_repo.due_tickets(conn, clock or "")),
+            "due_now": ticket_repo.count_live_due_tickets(conn, clock or ""),
         }
     finally:
         conn.close()
